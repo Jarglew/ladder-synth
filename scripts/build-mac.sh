@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds Ladder Synth on a Mac, installs the Audio Unit for Logic Pro, and checks it.
+# Builds Ladder Synth and Layer Stack on a Mac, installs the Audio Units for Logic Pro,
+# and checks them with Apple's auval.
 # Usage (from the repo folder):  ./scripts/build-mac.sh
 set -euo pipefail
 
@@ -22,17 +23,27 @@ echo "==> Configuring (the first run downloads JUCE, about 100 MB)"
 cmake -S . -B build -G Xcode
 
 echo "==> Building (a few minutes the first time)"
-cmake --build build --config Release --target LadderSynth_AU LadderSynth_VST3 LadderSynth_Standalone
+cmake --build build --config Release --target \
+    LadderSynth_AU LadderSynth_VST3 LadderSynth_Standalone \
+    LayerStack_AU LayerStack_VST3 LayerStack_Standalone
 
 echo "==> Refreshing the Audio Unit cache"
 killall -9 AudioComponentRegistrar 2>/dev/null || true
 
-echo "==> Validating the Audio Unit with Apple's auval"
-if auval -v aumu Ldr1 Jrgl | tail -n 5; then
-    echo
-    echo "Done. Ladder Synth is installed in ~/Library/Audio/Plug-Ins/Components."
+echo "==> Validating the Audio Units with Apple's auval"
+failed=0
+for code in Ldr1 Lst1; do
+    if auval -v aumu "$code" Jrgl | tail -n 3; then
+        echo
+    else
+        failed=1
+    fi
+done
+
+if [ "$failed" -eq 0 ]; then
+    echo "Done. Both synths are installed in ~/Library/Audio/Plug-Ins/Components."
     echo "In Logic Pro: create a Software Instrument track, then pick"
-    echo "Instrument > AU Instruments > Jarglew > Ladder Synth."
+    echo "Instrument > AU Instruments > Jarglew > Ladder Synth or Layer Stack."
 else
     echo "auval reported a problem; see the output above."
     exit 1

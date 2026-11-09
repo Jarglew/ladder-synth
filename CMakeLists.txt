@@ -18,6 +18,12 @@ if(LADDER_BUILD_TESTS)
     enable_testing()
     add_executable(EngineTests tests/EngineTests.cpp Source/dsp/SynthEngine.cpp)
     add_test(NAME EngineTests COMMAND EngineTests)
+
+    add_executable(StackEngineTests
+        Stack/tests/StackEngineTests.cpp
+        Stack/Source/engine/StackEngine.cpp
+        Stack/Source/engine/Arpeggiator.cpp)
+    add_test(NAME StackEngineTests COMMAND StackEngineTests)
 endif()
 
 option(LADDER_BUILD_PLUGIN "Build the plugin (needs JUCE)" ON)
@@ -82,6 +88,48 @@ target_link_libraries(LadderSynth
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
+# ---------------------------------------------------------------- Layer Stack plugin
+set(LAYERSTACK_SOURCES
+    Stack/Source/StackProcessor.cpp
+    Stack/Source/StackEditor.cpp
+    Stack/Source/StackParameters.cpp
+    Stack/Source/StackPresets.cpp
+    Stack/Source/fx/FxChain.cpp
+    Stack/Source/engine/StackEngine.cpp
+    Stack/Source/engine/Arpeggiator.cpp)
+
+juce_add_plugin(LayerStack
+    PRODUCT_NAME "Layer Stack"
+    COMPANY_NAME "Jarglew"
+    BUNDLE_ID "com.jarglew.layerstack"
+    PLUGIN_MANUFACTURER_CODE Jrgl
+    PLUGIN_CODE Lst1
+    FORMATS ${LADDER_FORMATS}
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    AU_MAIN_TYPE kAudioUnitType_MusicDevice
+    VST3_CATEGORIES Instrument Synth
+    COPY_PLUGIN_AFTER_BUILD TRUE)
+
+target_sources(LayerStack PRIVATE ${LAYERSTACK_SOURCES})
+
+target_compile_definitions(LayerStack PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+
+target_link_libraries(LayerStack
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags)
+
 # ---------------------------------------------------------------- plugin smoke test
 # Drives the real processor and editor without a host. Off by default.
 option(LADDER_BUILD_PLUGIN_TESTS "Build the plugin smoke test" OFF)
@@ -104,4 +152,17 @@ if(LADDER_BUILD_PLUGIN_TESTS)
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
     add_test(NAME PluginSmokeTest COMMAND PluginSmokeTest)
+
+    juce_add_console_app(StackSmokeTest PRODUCT_NAME "StackSmokeTest")
+    target_sources(StackSmokeTest PRIVATE Stack/tests/StackSmokeTest.cpp ${LAYERSTACK_SOURCES})
+    target_compile_definitions(StackSmokeTest PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JucePlugin_Name="Layer Stack")
+    target_link_libraries(StackSmokeTest PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+    add_test(NAME StackSmokeTest COMMAND StackSmokeTest)
 endif()
