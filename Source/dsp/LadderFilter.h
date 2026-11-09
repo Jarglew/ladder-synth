@@ -13,6 +13,24 @@ namespace ladder
 class LadderFilter
 {
 public:
+    // Cutoff-dependent values. Compute once and share between filters running
+    // at the same settings (for example the left and right channel).
+    struct Coefficients
+    {
+        float g = 0.0f, G = 0.0f, k = 0.0f;
+    };
+
+    static Coefficients makeCoefficients (float cutoffHz, float resonance, double sampleRate)
+    {
+        const float fc = std::clamp (cutoffHz, 10.0f, (float) (0.45 * sampleRate));
+        Coefficients c;
+        c.g = (float) std::tan (3.14159265358979 * fc / sampleRate);
+        c.G = c.g / (1.0f + c.g);
+        // resonance 0..1 maps onto feedback 0..~4.2 (self-oscillation from ~0.95).
+        c.k = 4.2f * std::clamp (resonance, 0.0f, 1.0f);
+        return c;
+    }
+
     void prepare (double newSampleRate)
     {
         sampleRate = newSampleRate;
@@ -25,20 +43,21 @@ public:
             s = 0.0f;
     }
 
-    // resonance 0..1 maps onto feedback 0..~4.2 (self-oscillation from ~0.95).
     float process (float input, float cutoffHz, float resonance, float driveGain)
     {
-        const float fc = std::clamp (cutoffHz, 10.0f, (float) (0.45 * sampleRate));
-        const float g = (float) std::tan (3.14159265358979 * fc / sampleRate);
-        const float G = g / (1.0f + g);
-        const float k = 4.2f * std::clamp (resonance, 0.0f, 1.0f);
+        return process (input, makeCoefficients (cutoffHz, resonance, sampleRate), driveGain);
+    }
+
+    float process (float input, const Coefficients& c, float driveGain)
+    {
+        const float G = c.G;
 
         // Each stage's state contribution, weighted by how much of it reaches the output.
-        const float sigma = (G * G * G * state[0] + G * G * state[1] + G * state[2] + state[3]) / (1.0f + g);
+        const float sigma = (G * G * G * state[0] + G * G * state[1] + G * state[2] + state[3]) / (1.0f + c.g);
 
         // Partial passband gain compensation keeps resonant patches from going thin.
-        const float x = input * driveGain * (1.0f + 0.35f * k);
-        float u = (x - k * sigma) / (1.0f + k * G * G * G * G);
+        const float x = input * driveGain * (1.0f + 0.35f * c.k);
+        float u = (x - c.k * sigma) / (1.0f + c.k * G * G * G * G);
         u = std::tanh (u);
 
         for (auto& s : state)
