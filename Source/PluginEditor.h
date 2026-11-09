@@ -22,12 +22,31 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
 };
 
+// One step of the trance-gate pattern: lit when open, outlined while the clock is on it.
+class StepButton : public juce::ToggleButton
+{
+public:
+    void setPlaying (bool shouldShow)
+    {
+        if (playing != shouldShow)
+        {
+            playing = shouldShow;
+            repaint();
+        }
+    }
+
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+
+private:
+    bool playing = false;
+};
+
 // The fixed-size front panel. The editor scales it to whatever size the window is.
-class SynthPanel : public juce::Component
+class SynthPanel : public juce::Component, private juce::Timer
 {
 public:
     static constexpr int designWidth = 1120;
-    static constexpr int designHeight = 520;
+    static constexpr int designHeight = 760;
 
     explicit SynthPanel (LadderSynthProcessor&);
     ~SynthPanel() override;
@@ -64,9 +83,20 @@ private:
     std::map<juce::String, Choice> choices;
     std::map<juce::String, Toggle> toggles;
     juce::ComboBox presetBox;
+    juce::TextButton prevPreset { "<" }, nextPreset { ">" };
+    std::vector<int> browseOrder; // program numbers in the order the browser lists them
 
-    struct Section { juce::String title; juce::Rectangle<int> area; };
+    struct Step
+    {
+        std::unique_ptr<StepButton> button;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+    };
+    std::vector<Step> steps;
+    int shownGateStep = -1;
+
+    struct Section { juce::String title; juce::Rectangle<int> area; bool startsRow; };
     std::vector<Section> sections;
+    int lowerStripTop = 0;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> rowLabels;
 
     void addKnob (const char* paramId, const juce::String& text);
@@ -75,6 +105,8 @@ private:
     void placeKnob (const char* paramId, juce::Rectangle<int> cell, int knobSize);
     void placeChoice (const char* paramId, juce::Rectangle<int> cell);
     void refreshPresetBox();
+    void stepPreset (int delta);
+    void timerCallback() override;
 };
 
 class LadderSynthEditor : public juce::AudioProcessorEditor

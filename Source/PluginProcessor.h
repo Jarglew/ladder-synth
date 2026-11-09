@@ -1,8 +1,9 @@
 #pragma once
 
 #include "Parameters.h"
-#include "dsp/SynthEngine.h"
+#include "dsp/Instrument.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
 #include <vector>
 
 class LadderSynthProcessor : public juce::AudioProcessor
@@ -24,7 +25,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 2.0; }
+    double getTailLengthSeconds() const override { return 8.0; } // release + delay + reverb
 
     int getNumPrograms() override;
     int getCurrentProgram() override { return currentProgram; }
@@ -37,14 +38,18 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // The trance-gate step under the clock (or -1), for the panel's step lights.
+    std::atomic<int> gateStepPlaying { -1 };
+
 private:
     ParameterReader reader;
-    ladder::SynthEngine engine;
-    std::vector<float> monoBuffer;
+    ladder::Instrument instrument;
+    std::vector<float> leftBuffer, rightBuffer;
     int currentProgram = 0;
 
     void handleMidi (const juce::MidiMessage& m);
     void renderRange (juce::AudioBuffer<float>& buffer, int start, int numSamples);
+    void readTransport();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LadderSynthProcessor)
 };

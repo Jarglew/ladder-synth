@@ -63,6 +63,107 @@ struct EnvelopeSettings
     float release = 0.3f;   // seconds
 };
 
+// ---------------------------------------------------------------- performance and FX
+// These are handled by Instrument, around the voice engine.
+
+enum class ArpMode
+{
+    up = 0,
+    down,
+    upDown,
+    random,
+    asPlayed,
+    chord
+};
+
+// Musical note lengths for tempo-synced things, in beats (quarter notes).
+enum class NoteLength
+{
+    whole = 0,
+    half,
+    quarterDotted,
+    quarter,
+    quarterTriplet,
+    eighthDotted,
+    eighth,
+    eighthTriplet,
+    sixteenthDotted,
+    sixteenth,
+    sixteenthTriplet,
+    thirtySecond
+};
+
+inline double noteLengthBeats (NoteLength n)
+{
+    switch (n)
+    {
+        case NoteLength::whole:            return 4.0;
+        case NoteLength::half:             return 2.0;
+        case NoteLength::quarterDotted:    return 1.5;
+        case NoteLength::quarter:          return 1.0;
+        case NoteLength::quarterTriplet:   return 2.0 / 3.0;
+        case NoteLength::eighthDotted:     return 0.75;
+        case NoteLength::eighth:           return 0.5;
+        case NoteLength::eighthTriplet:    return 1.0 / 3.0;
+        case NoteLength::sixteenthDotted:  return 0.375;
+        case NoteLength::sixteenth:        return 0.25;
+        case NoteLength::sixteenthTriplet: return 1.0 / 6.0;
+        case NoteLength::thirtySecond:     return 0.125;
+    }
+    return 0.25;
+}
+
+struct ArpSettings
+{
+    bool enabled = false;
+    ArpMode mode = ArpMode::up;
+    NoteLength rate = NoteLength::sixteenth;
+    int octaves = 1;           // 1..4
+    float gate = 0.5f;         // note length as a fraction of a step, 0.05..1
+    float swing = 0.0f;        // 0..1, delays every second step by up to half a step
+    bool hold = false;         // latch: notes keep playing after the keys are let go
+};
+
+struct GateSettings
+{
+    static constexpr int numSteps = 16;
+
+    bool enabled = false;
+    NoteLength rate = NoteLength::sixteenth;
+    float depth = 1.0f;        // 0..1, how far closed steps duck the level
+    float length = 0.75f;      // 0.1..1, open part of each open step
+    float smooth = 0.2f;       // 0..1, edge softness
+    bool steps[numSteps] { true, false, true, true, false, true, true, false,
+                           true, false, true, true, false, true, true, false };
+};
+
+struct ChorusSettings
+{
+    bool enabled = false;
+    float rateHz = 0.6f;
+    float depth = 0.5f;        // 0..1
+    float mix = 0.5f;          // 0..1
+};
+
+struct DelaySettings
+{
+    bool enabled = false;
+    NoteLength time = NoteLength::eighthDotted;
+    float feedback = 0.35f;    // 0..0.9
+    float damping = 0.3f;      // 0..1, darkens each repeat
+    float mix = 0.25f;         // 0..1
+    bool pingPong = true;
+};
+
+struct ReverbSettings
+{
+    bool enabled = false;
+    float size = 0.6f;         // 0..1
+    float damping = 0.4f;      // 0..1
+    float width = 1.0f;        // 0..1
+    float mix = 0.25f;         // 0..1
+};
+
 struct SynthParams
 {
     OscillatorSettings osc[3];
@@ -95,6 +196,12 @@ struct SynthParams
     float bendRangeSemitones = 2.0f;
     float masterTuneCents = 0.0f;
     float volumeGain = 0.5f;   // linear
+
+    ArpSettings arp;
+    GateSettings gate;
+    ChorusSettings chorus;
+    DelaySettings delay;
+    ReverbSettings reverb;
 };
 
 } // namespace ladder

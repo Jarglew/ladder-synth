@@ -1,6 +1,7 @@
 // Headless checks for the synth engine. No JUCE, no audio device.
 // Build and run with CMake: ctest --test-dir build --output-on-failure
 
+#include "../Source/dsp/Instrument.h"
 #include "../Source/dsp/SynthEngine.h"
 
 #include <cmath>
@@ -88,6 +89,83 @@ SynthEngine makeEngine (const SynthParams& p)
     e.prepare (sampleRate);
     e.setParams (p);
     return e;
+}
+
+// Collects what the arpeggiator plays, with the beat it happened on.
+struct ArpLog : Arpeggiator::Sink
+{
+    struct Event { bool on; int note; double beat; };
+    std::vector<Event> events;
+    double now = 0.0;
+    void arpNoteOn (int note, float) override { events.push_back ({ true, note, now }); }
+    void arpNoteOff (int note) override { events.push_back ({ false, note, now }); }
+
+    std::vector<int> ons() const
+    {
+        std::vector<int> r;
+        for (const auto& e : events)
+            if (e.on)
+                r.push_back (e.note);
+        return r;
+    }
+};
+
+// Steps the arpeggiator's clock forward in small increments, like Instrument does.
+void runArp (Arpeggiator& arp, ArpLog& log, double fromBeat, double toBeat)
+{
+    for (double b = fromBeat; b <= toBeat + 1.0e-9; b += 1.0 / 96.0)
+    {
+        log.now = b;
+        arp.processUntil (b, log);
+    }
+}
+
+std::vector<int> repeatPattern (std::vector<int> cycle, size_t count)
+{
+    std::vector<int> r;
+    for (size_t i = 0; i < count; ++i)
+        r.push_back (cycle[i % cycle.size()]);
+    return r;
+}
+
+std::string join (const std::vector<int>& v)
+{
+    std::string s;
+    for (int n : v)
+        s += std::to_string (n) + " ";
+    return s;
+}
+
+double windowRms (const std::vector<float>& x, size_t from, size_t to)
+{
+    double sum = 0.0;
+    to = std::min (to, x.size());
+    for (size_t i = from; i < to; ++i)
+        sum += (double) x[i] * x[i];
+    return std::sqrt (sum / (double) std::max<size_t> (1, to - from));
+}
+
+struct Stereo { std::vector<float> left, right; };
+
+Stereo renderInstrument (Instrument& inst, double seconds, int block = 256)
+{
+    Stereo out;
+    out.left.resize ((size_t) (seconds * sampleRate));
+    out.right.resize (out.left.size());
+    for (size_t pos = 0; pos < out.left.size(); pos += (size_t) block)
+    {
+        const int n = (int) std::min<size_t> ((size_t) block, out.left.size() - pos);
+        inst.render (out.left.data() + pos, out.right.data() + pos, n);
+    }
+    return out;
+}
+
+SynthParams percussiveParams()
+{
+    // Quick attack and release, so each arpeggiated note stands apart.
+    auto p = sineLikeParams();
+    p.ampEnv = { 0.001f, 0.05f, 1.0f, 0.005f };
+    return p;
 }
 } // namespace
 
@@ -272,6 +350,339 @@ int main()
         e.noteOn (69, 1.0f);
         const auto out = renderSeconds (e, 1.0);
         check (allFinite (out) && rms (out) > 0.05, "oscillator 3 as LFO modulates without breaking");
+    }
+
+    // ------------------------------------------------------------ arpeggiator
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::up;
+        s.rate = NoteLength::sixteenth;
+        s.gate = 0.5f;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (67, 1.0f);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (64, 1.0f);
+        arp.resync (0.0);
+        runArp (arp, log, 0.0, 1.99);
+        check (log.ons() == repeatPattern ({ 60, 64, 67 }, 8), "arp up plays the chord low to high: " + join (log.ons()));
+
+        bool timing = true;
+        int onIndex = 0;
+        for (const auto& e : log.events)
+        {
+            if (e.on)
+                timing = timing && std::fabs (e.beat - 0.25 * onIndex++) < 0.011;
+        }
+        check (timing, "arp sixteenths land every quarter beat");
+
+        double firstOff = -1.0;
+        for (const auto& e : log.events)
+            if (! e.on && firstOff < 0.0)
+                firstOff = e.beat;
+        check (std::fabs (firstOff - 0.125) < 0.011, "arp gate 50% ends the note half way through the step");
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::upDown;
+        s.octaves = 2;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (64, 1.0f);
+        runArp (arp, log, 0.0, 2.99);
+        check (log.ons() == repeatPattern ({ 60, 64, 72, 76, 72, 64 }, 12), "arp up/down over two octaves: " + join (log.ons()));
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::down;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (64, 1.0f);
+        arp.noteOn (67, 1.0f);
+        runArp (arp, log, 0.0, 1.49);
+        check (log.ons() == repeatPattern ({ 67, 64, 60 }, 6), "arp down: " + join (log.ons()));
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::asPlayed;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (67, 1.0f);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (72, 1.0f);
+        runArp (arp, log, 0.0, 1.49);
+        check (log.ons() == repeatPattern ({ 67, 60, 72 }, 6), "arp as played keeps key order: " + join (log.ons()));
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::random;
+        arp.setSettings (s, 0.0);
+        for (int n : { 60, 63, 67, 70 })
+            arp.noteOn (n, 1.0f);
+        runArp (arp, log, 0.0, 15.99);
+        const auto ons = log.ons();
+        bool inSet = ons.size() == 64, noRepeats = true;
+        for (size_t i = 0; i < ons.size(); ++i)
+        {
+            inSet = inSet && (ons[i] == 60 || ons[i] == 63 || ons[i] == 67 || ons[i] == 70);
+            if (i > 0)
+                noRepeats = noRepeats && ons[i] != ons[i - 1];
+        }
+        check (inSet && noRepeats, "arp random stays in the chord and never repeats a note twice in a row");
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.mode = ArpMode::chord;
+        s.octaves = 2;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (64, 1.0f);
+        runArp (arp, log, 0.0, 0.49);
+        check (log.ons() == std::vector<int> ({ 60, 64, 72, 76 }), "arp chord mode plays the chord, then an octave up: " + join (log.ons()));
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.hold = true;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        arp.noteOn (64, 1.0f);
+        arp.noteOff (60);
+        arp.noteOff (64);
+        runArp (arp, log, 0.0, 0.99);
+        check (log.ons() == repeatPattern ({ 60, 64 }, 4), "arp hold keeps playing after the keys are let go");
+        arp.noteOn (70, 1.0f);
+        log.events.clear();
+        runArp (arp, log, 1.0, 1.99);
+        check (log.ons() == repeatPattern ({ 70 }, 4), "arp hold: a new chord replaces the latched one");
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        runArp (arp, log, 0.0, 0.3);
+        arp.noteOff (60);
+        log.events.clear();
+        runArp (arp, log, 0.3, 2.0);
+        check (log.ons().empty() && arp.isIdle(), "arp stops when the keys are let go (without hold)");
+    }
+
+    {
+        Arpeggiator arp;
+        ArpLog log;
+        ArpSettings s;
+        s.enabled = true;
+        s.swing = 1.0f;
+        s.rate = NoteLength::eighth;
+        arp.setSettings (s, 0.0);
+        arp.noteOn (60, 1.0f);
+        runArp (arp, log, 0.0, 1.99);
+        std::vector<double> onBeats;
+        for (const auto& e : log.events)
+            if (e.on)
+                onBeats.push_back (e.beat);
+        check (onBeats.size() == 4 && std::fabs (onBeats[1] - 0.75) < 0.011 && std::fabs (onBeats[2] - 1.0) < 0.011,
+               "arp swing pushes every second step late");
+    }
+
+    // ------------------------------------------------------------ instrument
+
+    {
+        Instrument inst;
+        inst.prepare (sampleRate, 256);
+        auto p = percussiveParams();
+        p.arp.enabled = true;
+        p.arp.rate = NoteLength::sixteenth; // 6000 samples per step at 120 bpm, 48 kHz
+        p.arp.gate = 0.5f;
+        inst.setParams (p);
+        inst.setTransport (120.0, false, 0.0);
+        inst.noteOn (60, 1.0f);
+        const auto out = renderInstrument (inst, 1.0, 100);
+
+        bool pulses = true;
+        for (size_t step = 0; step < 7; ++step)
+        {
+            const double on = windowRms (out.left, step * 6000 + 300, step * 6000 + 2800);
+            const double off = windowRms (out.left, step * 6000 + 3600, step * 6000 + 5900);
+            pulses = pulses && on > 0.05 && off < on * 0.05;
+        }
+        check (pulses, "instrument: a held key arpeggiates in sixteenths at 120 bpm");
+    }
+
+    {
+        // Host playing from beat 0.1: the first arp note waits for the next sixteenth at 0.25.
+        Instrument inst;
+        inst.prepare (sampleRate, 512);
+        auto p = percussiveParams();
+        p.arp.enabled = true;
+        inst.setParams (p);
+        inst.setTransport (120.0, true, 0.1);
+        inst.noteOn (60, 1.0f);
+        const auto out = renderInstrument (inst, 0.25, 512);
+        const size_t firstStep = (size_t) (0.15 * 24000.0); // 0.15 beats at 24000 samples per beat
+        check (windowRms (out.left, 0, firstStep - 10) < 1.0e-6 && windowRms (out.left, firstStep + 50, firstStep + 2000) > 0.05,
+               "instrument: arp locks to the host's beat grid");
+    }
+
+    {
+        // Switching the arp off mid-phrase goes back to playing the held keys directly.
+        Instrument inst;
+        inst.prepare (sampleRate, 256);
+        auto p = percussiveParams();
+        p.arp.enabled = true;
+        inst.setParams (p);
+        inst.noteOn (69, 1.0f);
+        renderInstrument (inst, 0.2);
+        p.arp.enabled = false;
+        inst.setParams (p);
+        const auto out = renderInstrument (inst, 0.5);
+        check (std::fabs (estimateHz (out.left) - 440.0) < 2.0 && windowRms (out.left, 12000, 24000) > 0.1,
+               "instrument: turning the arp off keeps the held key sounding");
+    }
+
+    {
+        Instrument inst;
+        inst.prepare (sampleRate, 256);
+        auto p = sineLikeParams();
+        p.gate.enabled = true;
+        p.gate.depth = 1.0f;
+        p.gate.length = 1.0f;
+        p.gate.smooth = 0.0f;
+        for (int i = 0; i < GateSettings::numSteps; ++i)
+            p.gate.steps[i] = (i % 2) == 0;
+        inst.setParams (p);
+        inst.setTransport (120.0, false, 0.0);
+        inst.noteOn (69, 1.0f);
+        const auto out = renderInstrument (inst, 1.0);
+        bool chopped = true;
+        for (size_t step = 2; step < 7; step += 2)
+        {
+            const double open = windowRms (out.left, step * 6000 + 300, step * 6000 + 5700);
+            const double closed = windowRms (out.left, (step + 1) * 6000 + 300, (step + 1) * 6000 + 5700);
+            chopped = chopped && open > 0.1 && closed < open * 0.01;
+        }
+        check (chopped, "trance gate chops a held note on the sixteenth grid");
+    }
+
+    {
+        Instrument inst;
+        inst.prepare (sampleRate, 256);
+        auto p = sineLikeParams();
+        p.gate.enabled = true;
+        p.gate.depth = 0.0f;
+        inst.setParams (p);
+        inst.noteOn (69, 1.0f);
+        const auto out = renderInstrument (inst, 0.5);
+        const double a = windowRms (out.left, 6000, 12000), b = windowRms (out.left, 12000, 18000);
+        check (std::fabs (a - b) < a * 0.02, "trance gate at zero depth leaves the level alone");
+    }
+
+    {
+        StereoDelay d;
+        d.prepare (sampleRate);
+        DelaySettings s;
+        s.enabled = true;
+        s.time = NoteLength::quarter; // 0.5 s at 120 bpm
+        s.feedback = 0.5f;
+        s.damping = 0.0f;
+        s.mix = 1.0f;
+        s.pingPong = true;
+        std::vector<float> l ((size_t) sampleRate * 2, 0.0f), r (l.size(), 0.0f);
+        l[0] = r[0] = 1.0f;
+        d.process (s, 120.0, l.data(), r.data(), (int) l.size());
+        auto peakAround = [] (const std::vector<float>& x, size_t centre)
+        {
+            float pk = 0.0f;
+            for (size_t i = centre - 50; i < centre + 50; ++i)
+                pk = std::max (pk, std::fabs (x[i]));
+            return pk;
+        };
+        check (peakAround (l, 24000) > 0.5f && peakAround (r, 24000) < 0.05f, "ping-pong delay: first echo on the left after a quarter note");
+        check (peakAround (r, 48000) > 0.2f && peakAround (l, 48000) < 0.05f, "ping-pong delay: second echo crosses to the right");
+    }
+
+    {
+        Reverb rv;
+        rv.prepare (sampleRate);
+        ReverbSettings s;
+        s.enabled = true;
+        s.mix = 1.0f;
+        std::vector<float> l ((size_t) sampleRate * 6, 0.0f), r (l.size(), 0.0f);
+        l[0] = r[0] = 1.0f;
+        rv.process (s, l.data(), r.data(), (int) l.size());
+        check (allFinite (l) && allFinite (r), "reverb stays finite");
+        check (windowRms (l, 4800, 14400) > 0.001, "reverb leaves a tail after an impulse");
+        check (windowRms (l, 5 * 48000, 6 * 48000) < windowRms (l, 4800, 14400) * 0.01, "reverb tail dies away");
+    }
+
+    {
+        Instrument inst;
+        inst.prepare (sampleRate, 256);
+        auto p = sineLikeParams();
+        p.chorus.enabled = true;
+        p.chorus.mix = 1.0f;
+        inst.setParams (p);
+        inst.noteOn (60, 1.0f);
+        const auto out = renderInstrument (inst, 0.5);
+        double diff = 0.0;
+        for (size_t i = 0; i < out.left.size(); ++i)
+            diff += std::fabs (out.left[i] - out.right[i]);
+        check (allFinite (out.left) && allFinite (out.right) && diff / (double) out.left.size() > 0.01,
+               "chorus makes the left and right channels differ");
+    }
+
+    {
+        // Everything on and pushed hard: still finite and bounded.
+        Instrument inst;
+        inst.prepare (sampleRate, 512);
+        auto p = SynthParams {};
+        p.voiceMode = VoiceMode::poly;
+        p.emphasis = 0.9f;
+        p.drive = 1.0f;
+        p.arp.enabled = true;
+        p.arp.mode = ArpMode::chord;
+        p.arp.octaves = 4;
+        p.arp.rate = NoteLength::thirtySecond;
+        p.gate.enabled = true;
+        p.chorus = { true, 5.0f, 1.0f, 1.0f };
+        p.delay = { true, NoteLength::sixteenth, 0.9f, 0.0f, 1.0f, false };
+        p.reverb = { true, 1.0f, 0.0f, 1.0f, 1.0f };
+        inst.setParams (p);
+        inst.setTransport (174.0, true, 0.0);
+        for (int n : { 36, 48, 55, 60, 64, 67, 72 })
+            inst.noteOn (n, 1.0f);
+        const auto out = renderInstrument (inst, 3.0, 333);
+        check (allFinite (out.left) && allFinite (out.right) && peak (out.left) < 8.0f && peak (out.right) < 8.0f,
+               "arp + gate + full FX stays finite and bounded (peak " + std::to_string (peak (out.left)) + ")");
     }
 
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures);

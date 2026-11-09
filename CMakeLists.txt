@@ -11,12 +11,18 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
 endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
+# The sound engine: plain C++, no JUCE.
+set(LADDER_ENGINE_SOURCES
+    Source/dsp/SynthEngine.cpp
+    Source/dsp/Arpeggiator.cpp
+    Source/dsp/Instrument.cpp)
+
 # ---------------------------------------------------------------- engine tests
 # The sound engine is plain C++, so its tests build without JUCE.
 option(LADDER_BUILD_TESTS "Build the headless engine tests" ON)
 if(LADDER_BUILD_TESTS)
     enable_testing()
-    add_executable(EngineTests tests/EngineTests.cpp Source/dsp/SynthEngine.cpp)
+    add_executable(EngineTests tests/EngineTests.cpp ${LADDER_ENGINE_SOURCES})
     add_test(NAME EngineTests COMMAND EngineTests)
 endif()
 
@@ -67,7 +73,7 @@ target_sources(LadderSynth PRIVATE
     Source/PluginEditor.cpp
     Source/Parameters.cpp
     Source/Presets.cpp
-    Source/dsp/SynthEngine.cpp)
+    ${LADDER_ENGINE_SOURCES})
 
 target_compile_definitions(LadderSynth PUBLIC
     JUCE_WEB_BROWSER=0
@@ -94,7 +100,7 @@ if(LADDER_BUILD_PLUGIN_TESTS)
         Source/PluginEditor.cpp
         Source/Parameters.cpp
         Source/Presets.cpp
-        Source/dsp/SynthEngine.cpp)
+        ${LADDER_ENGINE_SOURCES})
     target_compile_definitions(PluginSmokeTest PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0

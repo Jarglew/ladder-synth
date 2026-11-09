@@ -11,6 +11,52 @@ const juce::StringArray rangeNames { "Lo", "32'", "16'", "8'", "4'", "2'" };
 const juce::StringArray waveNames { "Triangle", "Tri-Saw", "Rev Saw", "Saw", "Square", "Wide Pulse", "Narrow Pulse" };
 
 juce::ParameterID pid (const char* id) { return { id, 1 }; }
+// Parameters added after the first release carry version 2, so hosts keep their
+// automation for the original ones.
+juce::ParameterID pid2 (const char* id) { return { id, 2 }; }
+
+std::unique_ptr<APF> level2 (const char* id, const char* name, float def)
+{
+    return std::make_unique<APF> (pid2 (id), name, Range (0.0f, 1.0f), def);
+}
+
+std::unique_ptr<APF> percent2 (const char* id, const char* name, float lo, float hi, float def)
+{
+    return std::make_unique<APF> (pid2 (id), name, Range (lo, hi), def,
+                                  juce::AudioParameterFloatAttributes()
+                                      .withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; })
+                                      .withValueFromStringFunction ([] (const juce::String& t) { return t.getFloatValue() / 100.0f; }));
+}
+
+// Subsets of the note lengths, as (choice index -> NoteLength) tables.
+const int arpRates[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11 };      // 1/4 .. 1/32
+const int gateRates[] = { 6, 7, 9, 10, 11 };                 // 1/8, 1/8T, 1/16, 1/16T, 1/32
+const int delayTimes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };  // 1/2 .. 1/16T
+
+template <size_t N>
+juce::StringArray namesFor (const int (&table)[N])
+{
+    juce::StringArray names;
+    for (int index : table)
+        names.add (noteLengthNames()[index]);
+    return names;
+}
+
+template <size_t N>
+ladder::NoteLength lengthFor (const int (&table)[N], float choice)
+{
+    const int i = juce::jlimit (0, (int) N - 1, (int) choice);
+    return (ladder::NoteLength) table[i];
+}
+
+template <size_t N>
+int choiceFor (const int (&table)[N], int noteLength)
+{
+    for (size_t i = 0; i < N; ++i)
+        if (table[i] == noteLength)
+            return (int) i;
+    return 0;
+}
 
 Range timeRange() { return Range (0.001f, 10.0f, 0.0f, 0.25f); }
 
@@ -31,6 +77,13 @@ std::unique_ptr<APF> semitones (const char* id, const char* name)
                                   juce::AudioParameterFloatAttributes().withLabel ("st"));
 }
 } // namespace
+
+const juce::StringArray& noteLengthNames()
+{
+    static const juce::StringArray names { "1/1", "1/2", "1/4D", "1/4", "1/4T", "1/8D", "1/8",
+                                           "1/8T", "1/16D", "1/16", "1/16T", "1/32" };
+    return names;
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
@@ -87,6 +140,54 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                        juce::AudioParameterFloatAttributes().withLabel ("ct")),
                 std::make_unique<APF> (pid (volume), "Volume", Range (-60.0f, 6.0f), -6.0f,
                                        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+    using ladder::NoteLength;
+    const ladder::ArpSettings arpDefaults;
+    const ladder::GateSettings gateDefaults;
+    const ladder::ChorusSettings chorusDefaults;
+    const ladder::DelaySettings delayDefaults;
+    const ladder::ReverbSettings reverbDefaults;
+
+    layout.add (std::make_unique<APB> (pid2 (arpOn), "Arp On", false),
+                std::make_unique<APC> (pid2 (arpMode), "Arp Mode",
+                                       juce::StringArray { "Up", "Down", "Up/Down", "Random", "As Played", "Chord" }, 0),
+                std::make_unique<APC> (pid2 (arpRate), "Arp Rate", namesFor (arpRates),
+                                       choiceFor (arpRates, (int) arpDefaults.rate)),
+                std::make_unique<juce::AudioParameterInt> (pid2 (arpOctaves), "Arp Octaves", 1, 4, 1),
+                percent2 (arpGate, "Arp Gate", 0.05f, 1.0f, arpDefaults.gate),
+                percent2 (arpSwing, "Arp Swing", 0.0f, 1.0f, 0.0f),
+                std::make_unique<APB> (pid2 (arpHold), "Arp Hold", false));
+
+    layout.add (std::make_unique<APB> (pid2 (gateOn), "Gate On", false),
+                std::make_unique<APC> (pid2 (gateRate), "Gate Rate", namesFor (gateRates),
+                                       choiceFor (gateRates, (int) gateDefaults.rate)),
+                percent2 (gateDepth, "Gate Depth", 0.0f, 1.0f, gateDefaults.depth),
+                percent2 (gateLength, "Gate Length", 0.1f, 1.0f, gateDefaults.length),
+                percent2 (gateSmooth, "Gate Smooth", 0.0f, 1.0f, gateDefaults.smooth));
+    for (int i = 0; i < ladder::GateSettings::numSteps; ++i)
+        layout.add (std::make_unique<APB> (pid2 (gateSteps[i]), "Gate Step " + juce::String (i + 1), gateDefaults.steps[i]));
+
+    auto chorusRateRange = Range (0.05f, 8.0f);
+    chorusRateRange.setSkewForCentre (1.0f);
+    layout.add (std::make_unique<APB> (pid2 (chorusOn), "Chorus On", false),
+                std::make_unique<APF> (pid2 (chorusRate), "Chorus Rate", chorusRateRange, chorusDefaults.rateHz,
+                                       juce::AudioParameterFloatAttributes().withLabel ("Hz")),
+                level2 (chorusDepth, "Chorus Depth", chorusDefaults.depth),
+                level2 (chorusMix, "Chorus Mix", chorusDefaults.mix));
+
+    layout.add (std::make_unique<APB> (pid2 (delayOn), "Delay On", false),
+                std::make_unique<APC> (pid2 (delayTime), "Delay Time", namesFor (delayTimes),
+                                       choiceFor (delayTimes, (int) delayDefaults.time)),
+                percent2 (delayFeedback, "Delay Feedback", 0.0f, 0.9f, delayDefaults.feedback),
+                level2 (delayDamp, "Delay Damping", delayDefaults.damping),
+                level2 (delayMix, "Delay Mix", delayDefaults.mix),
+                std::make_unique<APB> (pid2 (delayPingPong), "Delay Ping-Pong", delayDefaults.pingPong));
+
+    layout.add (std::make_unique<APB> (pid2 (reverbOn), "Reverb On", false),
+                level2 (reverbSize, "Reverb Size", reverbDefaults.size),
+                level2 (reverbDamp, "Reverb Damping", reverbDefaults.damping),
+                level2 (reverbWidth, "Reverb Width", reverbDefaults.width),
+                level2 (reverbMix, "Reverb Mix", reverbDefaults.mix));
 
     return layout;
 }
@@ -153,5 +254,26 @@ ladder::SynthParams ParameterReader::read() const
     p.bendRangeSemitones = get (bendRange);
     p.masterTuneCents = get (masterTune);
     p.volumeGain = juce::Decibels::decibelsToGain (get (volume), -60.0f);
+
+    p.arp.enabled = get (arpOn) > 0.5f;
+    p.arp.mode = (ladder::ArpMode) (int) get (arpMode);
+    p.arp.rate = lengthFor (arpRates, get (arpRate));
+    p.arp.octaves = (int) get (arpOctaves);
+    p.arp.gate = get (arpGate);
+    p.arp.swing = get (arpSwing);
+    p.arp.hold = get (arpHold) > 0.5f;
+
+    p.gate.enabled = get (gateOn) > 0.5f;
+    p.gate.rate = lengthFor (gateRates, get (gateRate));
+    p.gate.depth = get (gateDepth);
+    p.gate.length = get (gateLength);
+    p.gate.smooth = get (gateSmooth);
+    for (int i = 0; i < ladder::GateSettings::numSteps; ++i)
+        p.gate.steps[i] = get (gateSteps[i]) > 0.5f;
+
+    p.chorus = { get (chorusOn) > 0.5f, get (chorusRate), get (chorusDepth), get (chorusMix) };
+    p.delay = { get (delayOn) > 0.5f, lengthFor (delayTimes, get (delayTime)), get (delayFeedback),
+                get (delayDamp), get (delayMix), get (delayPingPong) > 0.5f };
+    p.reverb = { get (reverbOn) > 0.5f, get (reverbSize), get (reverbDamp), get (reverbWidth), get (reverbMix) };
     return p;
 }

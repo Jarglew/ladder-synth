@@ -10,6 +10,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
 #include <cstdio>
+#include <set>
 
 
 namespace
@@ -61,6 +62,31 @@ RenderStats render (juce::AudioProcessor& p, double sampleRate, int blockSize, d
     }
     stats.rms = std::sqrt (sum / (double) std::max<int64_t> (1, count));
     return stats;
+}
+
+// A host transport that is playing at a fixed tempo, advancing with each block.
+struct FakeHost : juce::AudioPlayHead
+{
+    double bpm = 140.0, sampleRate = 48000.0;
+    int64_t samples = 0;
+
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setBpm (bpm);
+        info.setIsPlaying (true);
+        info.setTimeInSamples (samples);
+        info.setPpqPosition ((double) samples / sampleRate * bpm / 60.0);
+        return info;
+    }
+};
+
+void setParam (juce::AudioProcessor& p, const juce::String& id, float plainValue)
+{
+    for (auto* param : p.getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            if (ranged->paramID == id)
+                ranged->setValueNotifyingHost (ranged->convertTo0to1 (plainValue));
 }
 
 // Holds a C major chord for half a second, then releases it.
@@ -158,6 +184,49 @@ int main (int argc, char** argv)
             p.processBlock (*std::make_unique<juce::AudioBuffer<float>> (2, 16), *std::make_unique<juce::MidiBuffer>());
         }
         check (ok, "60 random settings stay finite and bounded (worst peak " + juce::String (worst, 2) + ")");
+    }
+
+    // Arpeggiator, trance gate and every effect, following a playing host.
+    {
+        p.setCurrentProgram (0);
+        for (const char* id : { "arpOn", "gateOn", "chorusOn", "delayOn", "reverbOn" })
+            setParam (p, id, 1.0f);
+        setParam (p, "voiceMode", 1.0f);
+
+        FakeHost host;
+        p.setPlayHead (&host);
+        juce::AudioBuffer<float> buffer (2, 480);
+        juce::MidiBuffer midi;
+        bool finite = true;
+        double sideDifference = 0.0, energy = 0.0;
+        std::set<int> stepsSeen;
+
+        for (int block = 0; block < 200; ++block) // two seconds
+        {
+            midi.clear();
+            if (block == 0)
+                for (int n : { 60, 64, 67 })
+                    midi.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 10);
+            p.processBlock (buffer, midi);
+            host.samples += buffer.getNumSamples();
+            stepsSeen.insert (static_cast<LadderSynthProcessor&> (p).gateStepPlaying.load());
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                const float l = buffer.getSample (0, i), r = buffer.getSample (1, i);
+                finite = finite && std::isfinite (l) && std::isfinite (r);
+                sideDifference += std::abs (l - r);
+                energy += std::abs (l) + std::abs (r);
+            }
+        }
+        p.setPlayHead (nullptr);
+
+        check (finite && energy > 100.0, "arp + gate + chorus + delay + reverb with a playing host");
+        check (sideDifference > energy * 0.05, "the effects make a stereo image");
+        check (stepsSeen.size() >= 16 && *stepsSeen.begin() >= 0, "gate step lights run through all 16 steps");
+
+        for (const char* id : { "arpOn", "gateOn", "chorusOn", "delayOn", "reverbOn" })
+            setParam (p, id, 0.0f);
     }
 
     // Save and restore.

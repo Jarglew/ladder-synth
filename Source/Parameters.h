@@ -53,7 +53,47 @@ inline constexpr const char* velFilter = "velFilter";
 inline constexpr const char* bendRange = "bendRange";
 inline constexpr const char* masterTune = "masterTune";
 inline constexpr const char* volume = "volume";
+
+// Arpeggiator
+inline constexpr const char* arpOn = "arpOn";
+inline constexpr const char* arpMode = "arpMode";
+inline constexpr const char* arpRate = "arpRate";
+inline constexpr const char* arpOctaves = "arpOctaves";
+inline constexpr const char* arpGate = "arpGate";
+inline constexpr const char* arpSwing = "arpSwing";
+inline constexpr const char* arpHold = "arpHold";
+
+// Trance gate
+inline constexpr const char* gateOn = "gateOn";
+inline constexpr const char* gateRate = "gateRate";
+inline constexpr const char* gateDepth = "gateDepth";
+inline constexpr const char* gateLength = "gateLength";
+inline constexpr const char* gateSmooth = "gateSmooth";
+inline constexpr const char* gateSteps[16] = {
+    "gateStep1", "gateStep2", "gateStep3", "gateStep4", "gateStep5", "gateStep6", "gateStep7", "gateStep8",
+    "gateStep9", "gateStep10", "gateStep11", "gateStep12", "gateStep13", "gateStep14", "gateStep15", "gateStep16"
+};
+
+// Effects
+inline constexpr const char* chorusOn = "chorusOn";
+inline constexpr const char* chorusRate = "chorusRate";
+inline constexpr const char* chorusDepth = "chorusDepth";
+inline constexpr const char* chorusMix = "chorusMix";
+inline constexpr const char* delayOn = "delayOn";
+inline constexpr const char* delayTime = "delayTime";
+inline constexpr const char* delayFeedback = "delayFeedback";
+inline constexpr const char* delayDamp = "delayDamp";
+inline constexpr const char* delayMix = "delayMix";
+inline constexpr const char* delayPingPong = "delayPingPong";
+inline constexpr const char* reverbOn = "reverbOn";
+inline constexpr const char* reverbSize = "reverbSize";
+inline constexpr const char* reverbDamp = "reverbDamp";
+inline constexpr const char* reverbWidth = "reverbWidth";
+inline constexpr const char* reverbMix = "reverbMix";
 } // namespace ParamIDs
+
+// Names of the tempo-synced note lengths, in ladder::NoteLength order.
+const juce::StringArray& noteLengthNames();
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

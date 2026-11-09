@@ -11,9 +11,11 @@ LadderSynthProcessor::LadderSynthProcessor()
 
 void LadderSynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    engine.prepare (sampleRate);
-    engine.setParams (reader.read());
-    monoBuffer.assign ((size_t) juce::jmax (samplesPerBlock, 1), 0.0f);
+    const int block = juce::jmax (samplesPerBlock, 32);
+    instrument.prepare (sampleRate, block);
+    instrument.setParams (reader.read());
+    leftBuffer.assign ((size_t) block, 0.0f);
+    rightBuffer.assign ((size_t) block, 0.0f);
 }
 
 bool LadderSynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -26,7 +28,8 @@ void LadderSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
-    engine.setParams (reader.read());
+    instrument.setParams (reader.read());
+    readTransport();
 
     // Render between MIDI events so every note starts on its exact sample.
     int position = 0;
@@ -38,16 +41,50 @@ void LadderSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         position = eventPos;
     }
     renderRange (buffer, position, buffer.getNumSamples() - position);
+
+    gateStepPlaying.store (instrument.currentGateStep(), std::memory_order_relaxed);
+}
+
+void LadderSynthProcessor::readTransport()
+{
+    double bpm = 120.0, ppq = 0.0;
+    bool playing = false;
+
+    if (auto* host = getPlayHead())
+    {
+        if (const auto position = host->getPosition())
+        {
+            if (const auto hostBpm = position->getBpm())
+                bpm = *hostBpm;
+            if (const auto hostPpq = position->getPpqPosition())
+            {
+                ppq = *hostPpq;
+                playing = position->getIsPlaying();
+            }
+        }
+    }
+
+    instrument.setTransport (bpm, playing, ppq);
 }
 
 void LadderSynthProcessor::renderRange (juce::AudioBuffer<float>& buffer, int start, int numSamples)
 {
+    const int channels = buffer.getNumChannels();
     while (numSamples > 0)
     {
-        const int chunk = juce::jmin (numSamples, (int) monoBuffer.size());
-        engine.render (monoBuffer.data(), chunk);
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            buffer.copyFrom (ch, start, monoBuffer.data(), chunk);
+        const int chunk = juce::jmin (numSamples, (int) leftBuffer.size());
+        instrument.render (leftBuffer.data(), rightBuffer.data(), chunk);
+
+        if (channels >= 2)
+        {
+            buffer.copyFrom (0, start, leftBuffer.data(), chunk);
+            buffer.copyFrom (1, start, rightBuffer.data(), chunk);
+        }
+        else if (channels == 1)
+        {
+            buffer.copyFrom (0, start, leftBuffer.data(), chunk, 0.5f);
+            buffer.addFrom (0, start, rightBuffer.data(), chunk, 0.5f);
+        }
         start += chunk;
         numSamples -= chunk;
     }
@@ -56,21 +93,21 @@ void LadderSynthProcessor::renderRange (juce::AudioBuffer<float>& buffer, int st
 void LadderSynthProcessor::handleMidi (const juce::MidiMessage& m)
 {
     if (m.isNoteOn())
-        engine.noteOn (m.getNoteNumber(), m.getFloatVelocity());
+        instrument.noteOn (m.getNoteNumber(), m.getFloatVelocity());
     else if (m.isNoteOff())
-        engine.noteOff (m.getNoteNumber());
+        instrument.noteOff (m.getNoteNumber());
     else if (m.isPitchWheel())
-        engine.setPitchBend ((float) (m.getPitchWheelValue() - 8192) / 8192.0f);
+        instrument.setPitchBend ((float) (m.getPitchWheelValue() - 8192) / 8192.0f);
     else if (m.isControllerOfType (1))
-        engine.setModWheel ((float) m.getControllerValue() / 127.0f);
+        instrument.setModWheel ((float) m.getControllerValue() / 127.0f);
     else if (m.isSustainPedalOn())
-        engine.setSustainPedal (true);
+        instrument.setSustainPedal (true);
     else if (m.isSustainPedalOff())
-        engine.setSustainPedal (false);
+        instrument.setSustainPedal (false);
     else if (m.isAllSoundOff())
-        engine.reset();
+        instrument.reset();
     else if (m.isAllNotesOff())
-        engine.allNotesOff();
+        instrument.allNotesOff();
 }
 
 int LadderSynthProcessor::getNumPrograms()

@@ -1,6 +1,7 @@
 # Ladder Synth
 
-A Minimoog-style monophonic/polyphonic subtractive synthesizer, built with
+A Minimoog-style monophonic/polyphonic subtractive synthesizer with a
+performance section (arpeggiator, trance gate, stereo effects), built with
 [JUCE](https://juce.com). It builds as an **Audio Unit for Logic Pro**, plus
 VST3 and a standalone app.
 
@@ -22,7 +23,19 @@ artwork or code.
 - **Modulation**: oscillator 3 or noise to the oscillators and/or the filter,
   depth from the mod wheel plus a Mod Amount knob.
 - Pitch bend (adjustable range), sustain pedal, velocity to loudness and filter.
-- 10 factory presets, shown in Logic's preset menu.
+- **Arpeggiator**: up, down, up/down, random, as played and chord modes;
+  rates from 1/4 to 1/32 including dotted and triplet; 1 to 4 octaves; gate
+  length, swing and hold (latch). It follows the host tempo and locks to the
+  bar while the host plays; when stopped it starts the moment you press a key.
+- **Trance gate**: a 16-step pattern that chops the sound in time with the
+  host, with rate, depth, step length and edge smoothing. The step lights show
+  where the pattern is.
+- **Stereo effects**: chorus, tempo-synced delay (ping-pong, feedback damping)
+  and reverb, each with its own on/off switch. Signal flow:
+  voices → trance gate → chorus → delay → reverb.
+- 26 factory presets in categories (Bass, Lead, Keys, Pluck, Pad, Arp, Gated,
+  FX), shown in Logic's preset menu. The panel's browser groups them by
+  category, with previous/next buttons.
 - Resizable panel; double-click any knob to reset it.
 
 ## Building on a Mac (for Logic Pro)
@@ -48,7 +61,9 @@ To work on it in Xcode instead: `cmake -S . -B build -G Xcode`, then open
 ## Tests
 
 The sound engine is plain C++ with its own tests (pitch accuracy, filter,
-resonance, mono/poly voice handling, glide, sustain, voice stealing):
+resonance, mono/poly voice handling, glide, sustain, voice stealing, every
+arpeggiator mode and its timing, host beat-grid locking, trance gate, delay
+echo timing, reverb decay, and everything on at once staying bounded):
 
 ```bash
 cmake -S . -B build -DLADDER_BUILD_PLUGIN=OFF && cmake --build build && ctest --test-dir build
@@ -56,13 +71,17 @@ cmake -S . -B build -DLADDER_BUILD_PLUGIN=OFF && cmake --build build && ctest --
 
 `-DLADDER_BUILD_PLUGIN_TESTS=ON` adds a smoke test that drives the real plugin
 processor and editor without a host: several sample rates and block sizes,
-every preset, random parameter sweeps, save/restore, and a PNG of the panel.
+every preset, random parameter sweeps, the arpeggiator, gate and effects
+following a simulated playing host, save/restore, and a PNG of the panel
+(pass a file name: `PluginSmokeTest panel.png`).
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `Source/dsp/` | The sound engine: oscillators, ladder filter, envelopes, voices. No JUCE. |
+| `Source/dsp/Instrument.*` | Wraps the voices with the beat clock, arpeggiator, trance gate and effects. |
+| `Source/dsp/Arpeggiator.*`, `TranceGate.h`, `Effects.h` | The arpeggiator, gate, chorus, delay and reverb. |
 | `Source/Parameters.*` | Every automatable parameter. |
 | `Source/Presets.*` | Factory presets. |
 | `Source/PluginProcessor.*` | The plugin: MIDI handling, state saving, presets. |

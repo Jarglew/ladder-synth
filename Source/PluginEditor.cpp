@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "Presets.h"
+#include <algorithm>
 
 namespace
 {
@@ -122,6 +123,23 @@ void PanelLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& l
     label.setFont (getComboBoxFont (box));
 }
 
+void StepButton::paintButton (juce::Graphics& g, bool highlighted, bool)
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.5f);
+    const bool on = getToggleState();
+
+    g.setColour (on ? accent : juce::Colour (0xff2a2a2f));
+    g.fillRoundedRectangle (r, 3.0f);
+    if (on)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.fillRoundedRectangle (r.withTrimmedBottom (r.getHeight() * 0.55f), 3.0f);
+    }
+
+    g.setColour (playing ? legendColour : (highlighted ? lineColour.brighter (0.6f) : lineColour.brighter (0.2f)));
+    g.drawRoundedRectangle (r, 3.0f, playing ? 2.0f : 1.0f);
+}
+
 // ============================================================== panel
 
 SynthPanel::SynthPanel (LadderSynthProcessor& p) : processor (p)
@@ -173,6 +191,61 @@ SynthPanel::SynthPanel (LadderSynthProcessor& p) : processor (p)
     addKnob (velFilter, "Vel > Filter");
     addKnob (bendRange, "Bend Range");
 
+    // Arpeggiator, trance gate and effects
+    addToggle (arpOn, "");
+    addChoice (arpMode, "Mode");
+    addChoice (arpRate, "Rate");
+    addKnob (arpOctaves, "Octaves");
+    addKnob (arpGate, "Gate");
+    addKnob (arpSwing, "Swing");
+    addToggle (arpHold, "Hold");
+
+    addToggle (gateOn, "");
+    addChoice (gateRate, "Rate");
+    addKnob (gateDepth, "Depth");
+    addKnob (gateLength, "Length");
+    addKnob (gateSmooth, "Smooth");
+    for (int i = 0; i < ladder::GateSettings::numSteps; ++i)
+    {
+        Step st;
+        st.button = std::make_unique<StepButton>();
+        st.button->setTooltip ("Gate step " + juce::String (i + 1) + ": lit steps let the sound through.");
+        addAndMakeVisible (*st.button);
+        st.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, gateSteps[i], *st.button);
+        steps.push_back (std::move (st));
+    }
+
+    addToggle (chorusOn, "");
+    addKnob (chorusRate, "Rate");
+    addKnob (chorusDepth, "Depth");
+    addKnob (chorusMix, "Mix");
+
+    addToggle (delayOn, "");
+    addChoice (delayTime, "Time");
+    addToggle (delayPingPong, "Ping-Pong");
+    addKnob (delayFeedback, "Feedback");
+    addKnob (delayDamp, "Damp");
+    addKnob (delayMix, "Mix");
+
+    addToggle (reverbOn, "");
+    addKnob (reverbSize, "Size");
+    addKnob (reverbDamp, "Damp");
+    addKnob (reverbWidth, "Width");
+    addKnob (reverbMix, "Mix");
+
+    toggles[arpOn].button->setTooltip ("Arpeggiator on/off. Follows the host tempo; locks to the bar while the host plays.");
+    toggles[arpHold].button->setTooltip ("Latch: the pattern keeps playing after you let go. A new chord replaces it.");
+    knobs[arpGate].slider->setTooltip ("Note length, as a share of each step.");
+    knobs[arpSwing].slider->setTooltip ("Pushes every second step late, for a shuffle.");
+    toggles[gateOn].button->setTooltip ("Trance gate on/off: chops the sound to the step pattern below, in time with the host.");
+    knobs[gateLength].slider->setTooltip ("How much of each lit step is open. Below 100% even runs of lit steps pulse.");
+    knobs[gateSmooth].slider->setTooltip ("Softens the gate's edges.");
+    toggles[chorusOn].button->setTooltip ("Chorus on/off");
+    toggles[delayOn].button->setTooltip ("Delay on/off. Times follow the host tempo.");
+    toggles[delayPingPong].button->setTooltip ("Echoes bounce between left and right.");
+    knobs[delayDamp].slider->setTooltip ("Darkens each repeat.");
+    toggles[reverbOn].button->setTooltip ("Reverb on/off");
+
     knobs[masterTune].slider->setTooltip ("Master tune, in cents. Double-click any knob to reset it.");
     knobs[modMix].slider->setTooltip ("Modulation source: left is oscillator 3, right is noise.");
     knobs[modAmount].slider->setTooltip ("Modulation depth, added to your mod wheel.");
@@ -181,16 +254,30 @@ SynthPanel::SynthPanel (LadderSynthProcessor& p) : processor (p)
     toggles[osc3KeyTrack].button->setTooltip ("Off: oscillator 3 drones at a fixed pitch. Use with the Lo range as an LFO.");
 
     addAndMakeVisible (presetBox);
-    presetBox.setTooltip ("Factory presets");
+    presetBox.setTooltip ("Factory presets, by category");
     refreshPresetBox();
     presetBox.onChange = [this]
     {
-        const int index = presetBox.getSelectedItemIndex();
+        const int index = presetBox.getSelectedId() - 1;
         if (index >= 0 && index != processor.getCurrentProgram())
             processor.setCurrentProgram (index);
     };
 
+    for (auto* b : { &prevPreset, &nextPreset })
+    {
+        b->setColour (juce::TextButton::buttonColourId, panelLight);
+        b->setColour (juce::TextButton::buttonOnColourId, panelLight);
+        b->setColour (juce::TextButton::textColourOffId, accent);
+        b->setColour (juce::ComboBox::outlineColourId, lineColour);
+        addAndMakeVisible (*b);
+    }
+    prevPreset.setTooltip ("Previous preset");
+    nextPreset.setTooltip ("Next preset");
+    prevPreset.onClick = [this] { stepPreset (-1); };
+    nextPreset.onClick = [this] { stepPreset (1); };
+
     setSize (designWidth, designHeight);
+    startTimerHz (30);
 }
 
 SynthPanel::~SynthPanel()
@@ -201,9 +288,53 @@ SynthPanel::~SynthPanel()
 void SynthPanel::refreshPresetBox()
 {
     presetBox.clear (juce::dontSendNotification);
-    for (int i = 0; i < processor.getNumPrograms(); ++i)
-        presetBox.addItem (processor.getProgramName (i), i + 1);
-    presetBox.setSelectedItemIndex (processor.getCurrentProgram(), juce::dontSendNotification);
+    browseOrder.clear();
+    const auto& presets = factoryPresets();
+
+    for (const char* category : presetCategories())
+    {
+        bool headed = false;
+        for (size_t i = 0; i < presets.size(); ++i)
+        {
+            if (juce::String (presets[i].category) != category)
+                continue;
+            if (! headed)
+            {
+                presetBox.addSectionHeading (category);
+                headed = true;
+            }
+            presetBox.addItem (presets[i].name, (int) i + 1);
+            browseOrder.push_back ((int) i);
+        }
+    }
+    presetBox.setSelectedId (processor.getCurrentProgram() + 1, juce::dontSendNotification);
+}
+
+void SynthPanel::stepPreset (int delta)
+{
+    if (browseOrder.empty())
+        return;
+    const auto it = std::find (browseOrder.begin(), browseOrder.end(), processor.getCurrentProgram());
+    const int here = it == browseOrder.end() ? 0 : (int) (it - browseOrder.begin());
+    const int size = (int) browseOrder.size();
+    const int next = browseOrder[(size_t) (((here + delta) % size + size) % size)];
+    processor.setCurrentProgram (next);
+    presetBox.setSelectedId (next + 1, juce::dontSendNotification);
+}
+
+void SynthPanel::timerCallback()
+{
+    const int step = processor.gateStepPlaying.load (std::memory_order_relaxed);
+    if (step != shownGateStep)
+    {
+        shownGateStep = step;
+        for (int i = 0; i < (int) steps.size(); ++i)
+            steps[(size_t) i].button->setPlaying (i == step);
+    }
+
+    // The host can change the program too.
+    if (presetBox.getSelectedId() != processor.getCurrentProgram() + 1)
+        presetBox.setSelectedId (processor.getCurrentProgram() + 1, juce::dontSendNotification);
 }
 
 void SynthPanel::addKnob (const char* paramId, const juce::String& text)
@@ -278,16 +409,34 @@ void SynthPanel::resized()
 
     auto area = getLocalBounds().reduced (28, 0); // wood cheeks
     auto top = area.removeFromTop (56);
-    presetBox.setBounds (top.removeFromRight (240).reduced (16, 14));
+    auto presetArea = top.removeFromRight (310).reduced (16, 14);
+    nextPreset.setBounds (presetArea.removeFromRight (28));
+    presetArea.removeFromRight (4);
+    prevPreset.setBounds (presetArea.removeFromRight (28));
+    presetArea.removeFromRight (6);
+    presetBox.setBounds (presetArea);
     area.removeFromBottom (10);
 
+    auto upper = area.removeFromTop (454);
+    auto lower = area;
+    lowerStripTop = lower.getY();
+
     const int titleH = 26;
+    auto* strip = &upper;
+    bool rowStart = true;
     auto take = [&] (const juce::String& title, int width)
     {
-        auto s = area.removeFromLeft (width);
-        sections.push_back ({ title, s });
+        auto s = strip->removeFromLeft (width);
+        sections.push_back ({ title, s, rowStart });
+        rowStart = false;
         s.removeFromTop (titleH);
         return s.reduced (8, 4);
+    };
+    // Section power switch, at the left of its title.
+    auto placePower = [&] (const char* paramId)
+    {
+        const auto& header = sections.back().area;
+        toggles.at (paramId).button->setBounds (header.getX() + 8, header.getY() + 3, 24, 20);
     };
 
     // Controllers
@@ -385,12 +534,94 @@ void SynthPanel::resized()
 
     // Output
     {
-        auto s = take ("OUTPUT", area.getWidth());
+        auto s = take ("OUTPUT", upper.getWidth());
         const int cellH = s.getHeight() / 4;
         placeKnob (volume, s.removeFromTop (cellH), 64);
         placeKnob (velAmp, s.removeFromTop (cellH), 48);
         placeKnob (velFilter, s.removeFromTop (cellH), 48);
         placeKnob (bendRange, s, 48);
+    }
+
+    // ---- lower strip: performance and effects
+    strip = &lower;
+    rowStart = true;
+
+    // Arpeggiator
+    {
+        auto s = take ("ARPEGGIATOR", 290);
+        placePower (arpOn);
+        s.removeFromTop (6);
+        auto row = s.removeFromTop (46);
+        placeChoice (arpMode, row.removeFromLeft (112).reduced (4, 0));
+        placeChoice (arpRate, row.removeFromLeft (84).reduced (4, 0));
+        toggles.at (arpHold).button->setBounds (row.withTrimmedLeft (14).withTrimmedBottom (18));
+        s.removeFromTop (12);
+        const int cellW = s.getWidth() / 3;
+        placeKnob (arpOctaves, s.removeFromLeft (cellW), 56);
+        placeKnob (arpGate, s.removeFromLeft (cellW), 56);
+        placeKnob (arpSwing, s, 56);
+    }
+
+    // Trance gate
+    {
+        auto s = take ("TRANCE GATE", 360);
+        placePower (gateOn);
+        auto knobRow = s.removeFromTop (s.getHeight() - 58);
+        const int cellW = knobRow.getWidth() / 4;
+        placeChoice (gateRate, knobRow.removeFromLeft (cellW).reduced (4, 0).withSizeKeepingCentre (cellW - 8, 46));
+        placeKnob (gateDepth, knobRow.removeFromLeft (cellW), 52);
+        placeKnob (gateLength, knobRow.removeFromLeft (cellW), 52);
+        placeKnob (gateSmooth, knobRow, 52);
+
+        // Four groups of four, with a gap between groups so the beats read at a glance.
+        auto stepRow = s.withSizeKeepingCentre (s.getWidth(), 40).translated (0, -6);
+        const int gap = 8;
+        const int stepW = (stepRow.getWidth() - 3 * gap) / 16;
+        int x = stepRow.getX() + (stepRow.getWidth() - (16 * stepW + 3 * gap)) / 2;
+        for (int i = 0; i < (int) steps.size(); ++i)
+        {
+            if (i > 0 && i % 4 == 0)
+                x += gap;
+            steps[(size_t) i].button->setBounds (x, stepRow.getY(), stepW, stepRow.getHeight());
+            x += stepW;
+        }
+    }
+
+    // Chorus
+    {
+        auto s = take ("CHORUS", 120);
+        placePower (chorusOn);
+        auto row = s.removeFromTop (s.getHeight() / 2);
+        placeKnob (chorusRate, row.removeFromLeft (row.getWidth() / 2), 40);
+        placeKnob (chorusDepth, row, 40);
+        placeKnob (chorusMix, s, 40);
+    }
+
+    // Delay
+    {
+        auto s = take ("DELAY", 170);
+        placePower (delayOn);
+        s.removeFromTop (6);
+        auto row = s.removeFromTop (46);
+        placeChoice (delayTime, row.removeFromLeft (70).reduced (2, 0));
+        toggles.at (delayPingPong).button->setBounds (row.withTrimmedLeft (8).withTrimmedBottom (18));
+        s.removeFromTop (12);
+        const int cellW = s.getWidth() / 3;
+        placeKnob (delayFeedback, s.removeFromLeft (cellW), 42);
+        placeKnob (delayDamp, s.removeFromLeft (cellW), 42);
+        placeKnob (delayMix, s, 42);
+    }
+
+    // Reverb
+    {
+        auto s = take ("REVERB", lower.getWidth());
+        placePower (reverbOn);
+        const int cellW = s.getWidth() / 2;
+        auto row = s.removeFromTop (s.getHeight() / 2);
+        placeKnob (reverbSize, row.removeFromLeft (cellW), 40);
+        placeKnob (reverbDamp, row, 40);
+        placeKnob (reverbWidth, s.removeFromLeft (cellW), 40);
+        placeKnob (reverbMix, s, 40);
     }
 }
 
@@ -424,13 +655,18 @@ void SynthPanel::paint (juce::Graphics& g)
     g.drawText ("LADDER", top.withTrimmedLeft (22), juce::Justification::centredLeft);
     g.setColour (accent);
     g.setFont (legendFont (14.0f));
-    g.drawText ("24 dB transistor-ladder synthesizer", top.withTrimmedLeft (138), juce::Justification::centredLeft);
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("24 dB transistor-ladder synthesizer  \xc2\xb7  arp  \xc2\xb7  gate  \xc2\xb7  fx")),
+                top.withTrimmedLeft (138), juce::Justification::centredLeft);
+
+    // Rule between the synth voice and the performance/effects strip
+    g.setColour (lineColour);
+    g.fillRect (body.getX() + 10, lowerStripTop, body.getWidth() - 20, 1);
 
     // Sections
     for (size_t i = 0; i < sections.size(); ++i)
     {
         const auto& s = sections[i];
-        if (i > 0)
+        if (! s.startsRow)
         {
             g.setColour (lineColour);
             g.drawVerticalLine (s.area.getX(), (float) s.area.getY() + 8.0f, (float) s.area.getBottom() - 4.0f);
