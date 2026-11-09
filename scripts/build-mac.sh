@@ -6,16 +6,26 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# CMake: use one that's installed, otherwise download a private copy into .tools/
 if ! command -v cmake >/dev/null 2>&1; then
-    echo "CMake is not installed."
-    echo "Install it with Homebrew:   brew install cmake"
-    echo "or download CMake.app from https://cmake.org/download/ and run:"
-    echo "   sudo \"/Applications/CMake.app/Contents/bin/cmake-gui\" --install"
-    exit 1
+    CMAKE_VERSION=3.30.5
+    CMAKE_DIR="$PWD/.tools/cmake-$CMAKE_VERSION-macos-universal"
+    if [ ! -x "$CMAKE_DIR/CMake.app/Contents/bin/cmake" ]; then
+        echo "==> CMake isn't installed, so downloading a copy just for this project (about 50 MB, one time only)"
+        mkdir -p .tools
+        curl -fL --progress-bar \
+            "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-macos-universal.tar.gz" \
+            | tar -xz -C .tools
+    fi
+    export PATH="$CMAKE_DIR/CMake.app/Contents/bin:$PATH"
 fi
 
-if ! xcode-select -p >/dev/null 2>&1; then
-    echo "Xcode command-line tools are missing. Run:  xcode-select --install"
+# The Xcode build needs the full Xcode app, not just the command-line tools.
+if ! xcodebuild -version >/dev/null 2>&1; then
+    echo "Xcode isn't set up for building."
+    echo "If Xcode is installed in Applications, run this once, then run this script again:"
+    echo "   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+    echo "Otherwise install Xcode from the App Store first."
     exit 1
 fi
 
